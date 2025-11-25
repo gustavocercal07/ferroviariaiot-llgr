@@ -1,76 +1,140 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
+#include <WiFiClientSecure.h>
+#include "env.h"
 
-WiFiClient client;            //cria objeto p/ wifi
-PubSubClient mqtt(client);    //cria objeto p/ mqtt usando WiFi
+WiFiClientSecure conexaoSegura;
+PubSubClient brokerMqtt(conexaoSegura);
 
-const String SSID = "FIESC_IOT_EDU";
-const String PASS = "8120gv08";
+const byte trigger1 = 22;
+const byte echo1 = 23;
+const byte trigger2 = 12;
+const byte echo2 = 13;
 
-const String brokerURL = "test.mosquitto.org";
-const int brokerPort = 1883 ;
-const String topico = "Lucas Rafael"; //nome do tópico
+const byte ledR = 14;
+const byte ledG = 26;
+const byte ledB = 25;
 
-const String brokerUser = "";   //variável para o user do broker
-const String brokerPass = "";   //variável para a senha do broker
+int medida1 = 0;
+int medida2 = 0;
+bool ultimoEstado1 = false;
+bool ultimoEstado2 = false;
+
+int calcularDistancia(byte pino_echo, byte pino_trigger) {
+  digitalWrite(pino_trigger, LOW);
+  delayMicroseconds(2);
+  digitalWrite(pino_trigger, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(pino_trigger, LOW);
+  
+  unsigned long tempo = pulseIn(pino_echo, HIGH, 30000);
+  if (tempo == 0) return -1;
+  return (tempo * 0.0343) / 2;
+}
+
+void alterarLed(byte vermelho, byte verde, byte azul) {
+  ledcWrite(ledR, vermelho);
+  ledcWrite(ledG, verde);
+  ledcWrite(ledB, azul);
+}
+
+void conectarWifi() {
+  WiFi.begin(SSID, PASS);
+  Serial.print("Estabelecendo conexao WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    alterarLed(0, 0, 255);
+    delay(300);
+  }
+  Serial.println("\nConexao WiFi estabelecida!");
+  alterarLed(0, 255, 0);
+}
+
+void estabelecerConexaoBroker() {
+  Serial.print("Conectando ao servidor MQTT");
+  String identificador = "S2-" + String(random(0xffff), HEX);
+  while (!brokerMqtt.connected()) {
+    if (brokerMqtt.connect(identificador.c_str(), BROKER_USER_NAME, BROKER_USER_PASS)) {
+      Serial.println("\nServidor MQTT conectado!");
+      alterarLed(0, 255, 0);
+    } else {
+      Serial.print(".");
+      delay(500);
+    }
+  }
+}
+
+void reconectarWifi() {
+  Serial.println("Reestabelecendo conexao WiFi...");
+  WiFi.disconnect();
+  WiFi.begin(SSID, PASS);
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    delay(300);
+  }
+  Serial.println("\nWiFi reconectado!");
+}
 
 void setup() {
-  Serial.begin(115200); //configura a placa para mostrar na tela
-  WiFi.begin(SSID, PASS); //tenta conectar na rede
-  Serial.println("Conectando no Wifi");
-  while(WiFi.status() != WL_CONNECTED){
-    Serial.print(".");
-    delay(200);
-  }
-  Serial.println("\nConectado com sucesso");
-
-  mqtt.setServer(brokerURL.c_str(),brokerPort);
-  Serial.println("Conectando no Broker");
-
-  String boardID = "Sensor";    //cria um nome que começa com "s1-"
-  boardID += String(random(0xffff),HEX); 
-
-  //Enquanto não estiver conectado mostra "."
-  while(!mqtt.connect(boardID.c_str())){
-    Serial.print(".");
-    delay(200);
-  }
-  Serial.println("\nConectado com sucesso no broker!");
-  mqtt.subscribe(topico.c_str()); //VAMOS MUDAR
-  mqtt.setCallback(callback);
-  pinMode(2, OUTPUT);
+  Serial.begin(115200);
+  
+  ledcAttach(ledR, 5000, 8);
+  ledcAttach(ledG, 5000, 8);
+  ledcAttach(ledB, 5000, 8);
+  alterarLed(255, 0, 0);
+  
+  conexaoSegura.setInsecure();
+  
+  pinMode(trigger1, OUTPUT);
+  pinMode(echo1, INPUT);
+  pinMode(trigger2, OUTPUT);
+  pinMode(echo2, INPUT);
+  
+  conectarWifi();
+  brokerMqtt.setServer(BROKER_URL, BROKER_PORT);
+  estabelecerConexaoBroker();
 }
 
 void loop() {
-    //String msg = "Lucas Rafael: Oi";  //Informação que será enviada para o broker
-    //String topico = "AulaIoT/msg";
-    //mqtt.publish(topico.c_str(),msg.c_str());
-    //delay(2000);
-    //mqtt.loop();
-
-    String mensagem = "";
-    if(Serial.available() > 0){
-        mensagem = Serial.readStringUntil('\n');
-        Serial.print("Mensagem digitada: ");
-        Serial.println(mensagem);
-        // mensagem = "Lucas Rafael: " + mensagem;
-        mqtt.publish("Gustavo",mensagem.c_str()); //envia msg
-    } 
-    mqtt.loop(); //mantem a conexão
-}
-
-void callback(char* topic, byte* payload, unsigned long lenght){
-    String mensagemRecebida = "";
-    for(int i = 0; i < lenght; i++){
-      mensagemRecebida += (char) payload[i];
-    }
-    Serial.println(mensagemRecebida);  
-  if(mensagemRecebida == "1") {
-    digitalWrite(2,HIGH);
-    Serial.println("Ligando...");
+  if (WiFi.status() != WL_CONNECTED) {
+    reconectarWifi();
   }
-  if(mensagemRecebida == "0") {
-    digitalWrite(2,LOW);
-    Serial.println("Apagando...");
+  
+  if (!brokerMqtt.connected()) {
+    estabelecerConexaoBroker();
   }
+  
+  brokerMqtt.loop();
+  
+  medida1 = calcularDistancia(echo1, trigger1);
+  medida2 = calcularDistancia(echo2, trigger2);
+  
+  bool estadoAtual1 = (medida1 > 0 && medida1 < 30);
+  if (estadoAtual1 != ultimoEstado1) {
+    const char* mensagem = estadoAtual1 ? "1" : "0";
+    brokerMqtt.publish(TOPIC5, mensagem);
+    Serial.print(">>> SENSOR 1 (TOPIC5): "); Serial.println(mensagem);
+    ultimoEstado1 = estadoAtual1;
+  }
+  
+  bool estadoAtual2 = (medida2 > 0 && medida2 < 30);
+  if (estadoAtual2 != ultimoEstado2) {
+    const char* mensagem = estadoAtual2 ? "1" : "0";
+    brokerMqtt.publish(TOPIC6, mensagem);
+    Serial.print(">>> SENSOR 2 (TOPIC6): "); Serial.println(mensagem);
+    ultimoEstado2 = estadoAtual2;
+  }
+  
+  if (estadoAtual1 || estadoAtual2) {
+    alterarLed(255, 255, 0);
+  } else {
+    alterarLed(0, 255, 0);
+  }
+  
+  Serial.println("-------------------------------");
+  Serial.print("Medicao 1 (TOPIC5): "); Serial.print(medida1); Serial.println(" cm");
+  Serial.print("Medicao 2 (TOPIC6): "); Serial.print(medida2); Serial.println(" cm");
+  Serial.println("-------------------------------");
+  
+  delay(1000);
 }
