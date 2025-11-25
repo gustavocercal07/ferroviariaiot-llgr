@@ -17,12 +17,10 @@ void processarMensagem(char* topico, byte* conteudo, unsigned long tamanho) {
   }
   Serial.println(textoRecebido);
 
-  // Se receber "1" = liga o LED (abre semáforo)
   if(textoRecebido == "1") {
     digitalWrite(2, HIGH);
     Serial.println("Ativando saida...");
   }
-  // Se receber "0" = desliga o LED (fecha semáforo)
   if(textoRecebido == "0") {
     digitalWrite(2, LOW);
     Serial.println("Desativando saida...");
@@ -59,7 +57,7 @@ void setup() {
   }
   Serial.println("Broker conectado");
 
-  // Inscreve nos tópicos (canais que vai receber mensagens)
+  // Inscreve nos tópicos 
   mqtt.subscribe(TOPIC4);
   mqtt.subscribe(TOPIC5);
   mqtt.subscribe(TOPIC6);
